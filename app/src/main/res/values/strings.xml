@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">Discord</string>
+    <string name="connection_error">Connection error</string>
+    <string name="connection_error_body">Unable to reach Discord. Check your internet connection and try again.</string>
+    <string name="retry">Retry</string>
+    <string name="downloading_file">Downloading…</string>
+    <string name="download_failed">Download failed</string>
+    <string name="storage_permission_required">Storage permission required to download</string>
+    <string name="media_permission_denied">Discord needs this permission for voice and video</string>
+</resources>
