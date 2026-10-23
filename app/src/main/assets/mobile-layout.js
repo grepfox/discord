@@ -17,7 +17,10 @@
     '[data-dm-base="page"]{grid-template-columns:[start] 0px [guildsEnd] 0px [channelsEnd] minmax(0,1fr) [end]!important}' +
     '[data-dm-base="page"] [data-dm-side]{display:none!important}' +
     '[data-dm-base="list"] [data-dm-side],[data-dm-base="list"] [data-dm-fill]{width:auto!important;max-width:none!important;min-width:0!important}' +
-    '[data-dm-base] [data-dm-resize]{display:none!important}';
+    '[data-dm-base] [data-dm-resize]{display:none!important}' +
+    '[data-dm-send]{display:flex;align-items:center;justify-content:center;flex:none;width:34px;height:34px;margin:auto 4px auto 6px;' +
+    'border:0;border-radius:50%;padding:0;background:#5865f2;color:#fff;cursor:pointer}' +
+    '[data-dm-send][data-empty]{display:none}';
   document.documentElement.appendChild(style);
 
   var mode = CHAT_ROUTE.test(location.pathname) ? 'page' : 'list';
@@ -144,11 +147,102 @@
   window.addEventListener('popstate', function () { setTimeout(onRoute, 0); });
   window.addEventListener('resize', function () { setTimeout(apply, 50); });
 
+  // Keep the chat pinned to the newest message when it gets shorter (keyboard opening)
+  // or is first shown. Discord's desktop client keeps the old scroll offset instead.
+  var atBottom = new WeakMap(); // scroller -> was the user at the bottom?
+  var pinnedAt = 0;
+  var observed = new WeakSet();
+  function chatScroller() {
+    var list = document.querySelector('[data-list-id="chat-messages"]');
+    for (var s = list; s && s !== document.body; s = s.parentElement) {
+      if (/auto|scroll/.test(getComputedStyle(s).overflowY)) return s;
+    }
+    return null;
+  }
+  function pin(s) {
+    pinnedAt = Date.now();
+    s.scrollTop = s.scrollHeight;
+  }
+  var resizeObs = new ResizeObserver(function (entries) {
+    entries.forEach(function (en) {
+      var s = en.target;
+      if (atBottom.get(s) === false || s.clientHeight === 0) return;
+      pin(s);
+      // Discord may re-render rows right after a resize; pin again once it settles.
+      [60, 200, 450].forEach(function (t) {
+        setTimeout(function () { if (atBottom.get(s) !== false) pin(s); }, t);
+      });
+    });
+  });
+  document.addEventListener('scroll', function (e) {
+    var s = e.target;
+    if (!observed.has(s) || Date.now() - pinnedAt < 600) return;
+    atBottom.set(s, s.scrollHeight - s.scrollTop - s.clientHeight < 80);
+  }, true);
+  function watchScroller() {
+    var s = chatScroller();
+    if (s && !observed.has(s)) { observed.add(s); resizeObs.observe(s); }
+  }
+
+  // The desktop client sends with Enter only; add a send button like the mobile app.
+  var SEND_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">' +
+    '<path d="M3.4 20.4 21.85 12.5a.55.55 0 0 0 0-1L3.4 3.6a.5.5 0 0 0-.7.6L5 11l9 1-9 1-2.3 6.8a.5.5 0 0 0 .7.6Z"/></svg>';
+  function editorFor(btn) {
+    var form = btn.closest('form');
+    return form && form.querySelector('[role="textbox"][data-slate-editor]');
+  }
+  function isEmpty(ed) {
+    return !ed || !ed.querySelector('[data-slate-string], img, [data-slate-void]');
+  }
+  function updateSend() {
+    document.querySelectorAll('[data-dm-send]').forEach(function (b) {
+      if (isEmpty(editorFor(b))) b.setAttribute('data-empty', '');
+      else b.removeAttribute('data-empty');
+    });
+  }
+  function addSend() {
+    if (window.innerWidth >= WIDE) {
+      document.querySelectorAll('[data-dm-send]').forEach(function (b) { b.remove(); });
+      return;
+    }
+    document.querySelectorAll('form [role="textbox"][data-slate-editor]').forEach(function (ed) {
+      var bar = ed.closest('form').querySelector('[class^="buttons_"],[class*=" buttons_"]');
+      if (!bar || bar.querySelector('[data-dm-send]')) return;
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.setAttribute('data-dm-send', '');
+      b.setAttribute('aria-label', 'Send');
+      b.innerHTML = SEND_ICON;
+      // Keep focus in the message box so the keyboard stays open.
+      ['pointerdown', 'mousedown', 'touchstart'].forEach(function (t) {
+        b.addEventListener(t, function (e) { e.preventDefault(); }, { passive: false });
+      });
+      b.addEventListener('click', function (e) {
+        e.preventDefault();
+        var target = editorFor(b);
+        if (isEmpty(target)) return;
+        target.focus();
+        var init = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
+        target.dispatchEvent(new KeyboardEvent('keydown', init));
+        target.dispatchEvent(new KeyboardEvent('keyup', init));
+        setTimeout(updateSend, 50);
+        setTimeout(updateSend, 300);
+      });
+      bar.appendChild(b);
+    });
+    updateSend();
+  }
+  ['input', 'keyup', 'paste', 'cut'].forEach(function (t) {
+    document.addEventListener(t, function () { setTimeout(updateSend, 0); }, true);
+  });
+
   // React can remount the layout; re-apply when our markers disappear.
   var pending = false;
   function check() {
     pending = false;
     if (!intact()) apply();
+    watchScroller();
+    addSend();
   }
   function start() {
     new MutationObserver(function () {
