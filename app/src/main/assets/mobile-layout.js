@@ -123,10 +123,31 @@
   }, true);
 
   var lastPath = location.pathname;
+  var lastRouteAt = 0;
+
+  // The desktop client focuses the message box when a channel opens, which pops up the
+  // keyboard on a phone. Only let it focus right after the user taps (e.g. the box itself or
+  // Reply), and never just because the channel changed.
+  var lastTap = { at: 0, inComposer: false };
+  document.addEventListener('pointerdown', function (e) {
+    var t = e.target;
+    lastTap = { at: Date.now(), inComposer: !!(t && t.closest && t.closest('form')) };
+  }, true);
+  var realFocus = HTMLElement.prototype.focus;
+  HTMLElement.prototype.focus = function () {
+    if (window.innerWidth < WIDE && this.isContentEditable && this !== document.activeElement &&
+        this.closest && this.closest('form')) {
+      var now = Date.now();
+      var tapped = now - lastTap.at < 1000;
+      if (!(tapped && lastTap.inComposer) && (!tapped || now - lastRouteAt < 1500)) return;
+    }
+    return realFocus.apply(this, arguments);
+  };
   function onRoute() {
     var path = location.pathname;
     if (path === lastPath) return;
     lastPath = path;
+    lastRouteAt = Date.now();
     if (Date.now() - lastClick.at < 1500) {
       // Tapping a server shows its channel list; tapping anything else opens it.
       setMode(lastClick.inGuilds ? 'list' : 'page');
