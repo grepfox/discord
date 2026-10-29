@@ -194,6 +194,20 @@
   function isEmpty(ed) {
     return !ed || !ed.querySelector('[data-slate-string], img, [data-slate-void]');
   }
+  // Prefer a real Enter key press from the app; Discord may ignore script-made key events.
+  function pressEnter(target) {
+    if (window.AndroidInput) {
+      try { AndroidInput.pressEnter(); return; } catch (e) {}
+    }
+    // Chromium ignores keyCode/which in the event init, so set them directly.
+    ['keydown', 'keypress', 'keyup'].forEach(function (type) {
+      var ev = new KeyboardEvent(type, { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true });
+      Object.defineProperty(ev, 'keyCode', { get: function () { return 13; } });
+      Object.defineProperty(ev, 'which', { get: function () { return 13; } });
+      Object.defineProperty(ev, 'charCode', { get: function () { return type === 'keypress' ? 13 : 0; } });
+      target.dispatchEvent(ev);
+    });
+  }
   function updateSend() {
     document.querySelectorAll('[data-dm-send]').forEach(function (b) {
       if (isEmpty(editorFor(b))) b.setAttribute('data-empty', '');
@@ -213,18 +227,17 @@
       b.setAttribute('data-dm-send', '');
       b.setAttribute('aria-label', 'Send');
       b.innerHTML = SEND_ICON;
-      // Keep focus in the message box so the keyboard stays open.
-      ['pointerdown', 'mousedown', 'touchstart'].forEach(function (t) {
-        b.addEventListener(t, function (e) { e.preventDefault(); }, { passive: false });
+      // Keep focus in the message box so the keyboard stays open. Not touchstart:
+      // cancelling that would also cancel the tap's click.
+      ['pointerdown', 'mousedown'].forEach(function (t) {
+        b.addEventListener(t, function (e) { e.preventDefault(); });
       });
       b.addEventListener('click', function (e) {
         e.preventDefault();
         var target = editorFor(b);
         if (isEmpty(target)) return;
         target.focus();
-        var init = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
-        target.dispatchEvent(new KeyboardEvent('keydown', init));
-        target.dispatchEvent(new KeyboardEvent('keyup', init));
+        pressEnter(target);
         setTimeout(updateSend, 50);
         setTimeout(updateSend, 300);
       });

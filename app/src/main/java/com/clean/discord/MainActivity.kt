@@ -14,14 +14,18 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.os.Message
+import android.os.SystemClock
 import android.provider.MediaStore
 import android.util.Base64
 import android.util.Log
+import android.view.KeyEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.animation.AccelerateDecelerateInterpolator
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -316,6 +320,11 @@ class MainActivity : ComponentActivity() {
         configureWebSettings(webView.settings)
         webView.isVerticalScrollBarEnabled = false
         webView.isHorizontalScrollBarEnabled = false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            // Keep the page process as important as the app even in the background, so Android
+            // doesn't kill it (and reload Discord) while another app like the file picker is open.
+            webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
+        }
 
         CookieManager.getInstance().apply {
             setAcceptCookie(true)
@@ -338,7 +347,22 @@ class MainActivity : ComponentActivity() {
             }
         }, "AndroidTheme")
 
-        notificationBridge = NotificationBridge(this) { requestNotificationPermission(it) }
+        webView.addJavascriptInterface(object {
+            /** Sends a real Enter key to the focused message box (used by the send button). */
+            @JavascriptInterface
+            fun pressEnter() {
+                runOnUiThread {
+                    webView.requestFocus()
+                    val now = SystemClock.uptimeMillis()
+                    webView.dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER, 0))
+                    webView.dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER, 0))
+                }
+            }
+        }, "AndroidInput")
+
+        if (!::notificationBridge.isInitialized) {
+            notificationBridge = NotificationBridge(this) { requestNotificationPermission(it) }
+        }
         webView.addJavascriptInterface(notificationBridge, "AndroidNotifier")
         installPageScripts()
 
@@ -383,6 +407,14 @@ class MainActivity : ComponentActivity() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val uri = request?.url ?: return false
                 return routeUrl(uri, request.isForMainFrame, view)
+            }
+
+            // If Android kills the page process anyway, swap in a fresh WebView instead of
+            // letting the whole app crash and restart.
+            override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
+                Log.w(TAG, "Render process gone; recreating WebView")
+                if (view === webView) replaceWebView()
+                return true
             }
         }
 
@@ -491,6 +523,28 @@ class MainActivity : ComponentActivity() {
                 startFileDownload(url, userAgent, contentDisposition, mimetype)
             }
         }
+    }
+
+    private fun replaceWebView() {
+        val old = webView
+        val url = old.url ?: START_URL
+        val parent = old.parent as ViewGroup
+        val index = parent.indexOfChild(old)
+        val params = old.layoutParams
+        filePathCallback?.onReceiveValue(null)
+        filePathCallback = null
+        parent.removeView(old)
+        old.destroy()
+
+        webView = WebView(this).apply {
+            id = R.id.webView
+            setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.bg))
+            overScrollMode = View.OVER_SCROLL_NEVER
+        }
+        parent.addView(webView, index, params)
+        hasDocumentStartScripts = false
+        setupWebView()
+        webView.loadUrl(url)
     }
 
     private val pageScripts by lazy {
